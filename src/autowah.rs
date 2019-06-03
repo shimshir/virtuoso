@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::f32::consts::E;
 use std::f32::consts::PI;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub struct Autowah {
@@ -14,7 +15,8 @@ pub struct Autowah {
   alpha_r: f32,
   beta_a: f32,
   beta_r: f32,
-  buffer_l: [f32; 2],
+  buffer_l_0: Cell<f32>,
+  buffer_l_1: Cell<f32>,
   // Lowpass filter parameters
   buffer_lp: Cell<f32>,
   gain_lp: f32,
@@ -30,6 +32,7 @@ pub struct Autowah {
   // Mixer parameters
   alpha_mix: f32,
   beta_mix: f32,
+  avg_times: Vec<u128>
 }
 
 impl Autowah {
@@ -52,7 +55,8 @@ impl Autowah {
       alpha_r: alpha_r,
       beta_a: 1.0 - alpha_a,
       beta_r: 1.0 - alpha_r,
-      buffer_l: [0.0, 0.0],
+      buffer_l_0: Cell::new(0.0),
+      buffer_l_1: Cell::new(0.0),
       // Lowpass filter parameters
       buffer_lp: Cell::new(0.0),
       gain_lp: (0.5 * q).sqrt(),
@@ -68,10 +72,72 @@ impl Autowah {
       // Mixer parameters
       alpha_mix: alpha_mix,
       beta_mix: 1.0 - alpha_mix,
+      avg_times: Vec::new()
     }
   }
 
   fn y_filter(&self) -> f32 {
     self.y_bandpass.get()
   }
+
+  pub fn run(&mut self, x: f32) -> f32 {
+    let start = Instant::now();
+    let x_l = if x < 0.0 {-x} else {x};
+    let y_l: f32 = self.level_detector(x_l);
+    self.center_freq.set(y_l * self.freq_bandwidth + self.min_freq);
+    let x_f: f32 = self.low_pass_filter(x);
+    let y_f: f32 = self.state_variable_filter(x_f);
+    let y: f32 = self.mixer(x, y_f);
+    self.avg_times.push(start.elapsed().as_nanos());
+    y
+  }
+
+  fn level_detector(&self, x: f32) -> f32 {
+    let y1: f32 = self.alpha_r * self.buffer_l_1.get() + self.beta_r * x;
+    self.buffer_l_1.set(if x > y1 {x} else {y1});
+    self.buffer_l_0.set(self.alpha_a * self.buffer_l_0.get() + self.beta_a * self.buffer_l_1.get());
+    self.buffer_l_0.get()
+  }
+
+  fn low_pass_filter(&self, x: f32) -> f32 {
+    let k: f32 = self.tan(self.center_freq.get());
+    let b0: f32 = k / (k + 1.0);
+    let a1: f32 = 2.0 * (b0 - 0.5);
+    let buffer_lp_val = self.buffer_lp.get();
+    let xh: f32 = x - a1 * buffer_lp_val;
+    let y: f32 = b0 * (xh + buffer_lp_val);
+    self.buffer_lp.set(xh);
+    self.gain_lp * y
+  }
+
+  fn tan(&self, x: f32) -> f32 {
+    x * (1.0 + self.tan_const3 * x * x)
+  }
+
+  fn state_variable_filter(&self, x: f32) -> f32 {
+    let f: f32 = 2.0 * self.sin(self.center_freq.get());
+    self.y_highpass.set(x - self.y_lowpass.get() - self.q * self.y_bandpass.get());
+
+    let y_band_value = self.y_bandpass.get();
+    self.y_bandpass.set(y_band_value + f * self.y_highpass.get());
+
+    let y_low_value = self.y_lowpass.get();
+    self.y_lowpass.set(y_low_value + f * self.y_bandpass.get());
+
+    self.y_filter()
+  }
+
+  fn sin(&self, x: f32) -> f32 {
+    x * (1.0 + self.sin_const3 * x * x)
+  }
+
+  fn mixer(&self, x: f32, y: f32) -> f32 {
+    self.alpha_mix * y + self.beta_mix * x
+  }
+
+  pub fn avg_time(&self) -> f64 {
+    let sum: u128 = self.avg_times.iter().sum();
+    sum as f64 / self.avg_times.len() as f64
+  }
+
 }
