@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::f32::consts::E;
 use std::f32::consts::PI;
-use std::time::Instant;
 
 #[derive(Debug)]
 pub struct Autowah {
@@ -31,8 +30,7 @@ pub struct Autowah {
   y_lowpass: Cell<f32>,
   // Mixer parameters
   alpha_mix: f32,
-  beta_mix: f32,
-  avg_times: Vec<u128>
+  beta_mix: f32
 }
 
 impl Autowah {
@@ -41,7 +39,7 @@ impl Autowah {
   }
 
   pub fn new(tau_a: f32, tau_r: f32, min_f: f32, max_f: f32, q: f32, alpha_mix: f32) -> Autowah {
-    let fs = 44.1e3;
+    let fs = 44_100.0 / 1.0;
     let alpha_a = E.powf(-1.0 / (tau_a * fs));
     let alpha_r = E.powf(-1.0 / (tau_r * fs));
 
@@ -71,8 +69,7 @@ impl Autowah {
       y_lowpass: Cell::new(0.0),
       // Mixer parameters
       alpha_mix: alpha_mix,
-      beta_mix: 1.0 - alpha_mix,
-      avg_times: Vec::new()
+      beta_mix: 1.0 - alpha_mix
     }
   }
 
@@ -80,15 +77,13 @@ impl Autowah {
     self.y_bandpass.get()
   }
 
-  pub fn run(&mut self, x: f32) -> f32 {
-    let start = Instant::now();
+  pub fn run(&self, x: f32) -> f32 {
     let x_l = if x < 0.0 {-x} else {x};
     let y_l: f32 = self.level_detector(x_l);
     self.center_freq.set(y_l * self.freq_bandwidth + self.min_freq);
     let x_f: f32 = self.low_pass_filter(x);
     let y_f: f32 = self.state_variable_filter(x_f);
     let y: f32 = self.mixer(x, y_f);
-    self.avg_times.push(start.elapsed().as_nanos());
     y
   }
 
@@ -133,11 +128,6 @@ impl Autowah {
 
   fn mixer(&self, x: f32, y: f32) -> f32 {
     self.alpha_mix * y + self.beta_mix * x
-  }
-
-  pub fn avg_time(&self) -> f64 {
-    let sum: u128 = self.avg_times.iter().sum();
-    sum as f64 / self.avg_times.len() as f64
   }
 
 }
